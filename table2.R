@@ -64,8 +64,9 @@ pec_clasrooms_group_mean <- elearn_reg_data %>%
 elearn_reg_data_tooktest <- elearn_reg_data %>%
   filter(tooktest_el==1)
 
-elearn_reg_data_lasso_matrix <- elearn_reg_data_tooktest %>% 
-  select(treatment,
+elearn_reg_data_lasso_matrix <- elearn_reg_data_tooktest %>%
+  select(v_z_irt_math_bl,
+         v_z_irt_sci_bl,
          starts_with("strata"),
          starts_with("v_"),
          -strataFE6) %>%
@@ -86,35 +87,34 @@ plot(cv_model)
 cv_model
 
 best_model <- glmnet::glmnet(
-  x = elearn_reg_data_glmnet,
-  y = elearn_reg_data %>% filter(tooktest_el==1) %>% pull(z_irt_total_el),
-  lambda = cv_model$lambda.min,
+  x = elearn_reg_data_lasso_matrix,
+  y = elearn_reg_data_tooktest %>% pull(z_irt_total_el),
+  lambda = 1.066912e-01,
   alpha = 1,
-  penalty.factor = c(rep(0, 8), rep(1, 298)),
+  penalty.factor = c(rep(0, 7), rep(1, 298)),
   relax = T
 )
 
 selected_coef <- as.data.frame(as.matrix(best_model$beta)) %>%
   filter(s0 != 0)
 
-# lasso_x <- elearn_reg_data_tooktest %>% 
-#   select(v_z_irt_math_bl,
-#          v_z_irt_sci_bl,
-#          starts_with("strata"),
-#          starts_with("v_"),
-#          -strataFE6) %>% 
-#   as.matrix()
-# 
-# lasso_y <- elearn_reg_data_tooktest %>% pull(z_irt_total_el) %>% as.matrix()
-# 
-# lasso_d <- elearn_reg_data_tooktest %>% pull(treatment) %>% as.matrix()
-# 
-# lasso <- hdm::rlassoEffect(
-#   x = lasso_x,
-#   y = lasso_y,
-#   d = lasso_d,
-#   I3 = c(rep(T, 7), rep(F, 298)),
-#   method = "double selection"
-# )
-# 
-# lasso$coefficients
+lasso_x <- elearn_reg_data_tooktest %>%
+  select(v_z_irt_math_bl,
+         v_z_irt_sci_bl,
+         starts_with("strata"),
+         starts_with("v_")) %>%
+  as.matrix()
+
+lasso_y <- elearn_reg_data_tooktest %>% pull(z_irt_total_el) %>% as.matrix()
+
+lasso_d <- elearn_reg_data_tooktest %>% pull(treatment) %>% as.matrix()
+
+lasso <- hdm::rlassoEffect(
+  x = lasso_x,
+  y = lasso_y,
+  d = lasso_d,
+  I3 = c(rep(T, 7), rep(F, 298)),
+  method = "double selection"
+)
+
+lasso$coefficients
