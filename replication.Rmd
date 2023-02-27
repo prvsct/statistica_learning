@@ -1,0 +1,347 @@
+---
+title: "Replication Beg. et al. (2022)"
+author: "Pedro Scatimburgo"
+date: "`r Sys.Date()`"
+bibliography: bib.bib
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+rm(list=ls())
+```
+
+# Preamble
+
+I will replicate Table 1 - Summary Statistics in page 75 and columns (1), (3) and (5) from Panel A. Table 2 - Achievement Effects in page 76. Unfortunately, I wasn't able to replicate any of the LASSO results in Panel B. Still, I present the code below and compare with the selected controls to offer possible explanations.
+
+```{r}
+# Loads main packages
+library(tidyverse)
+library(estimatr)
+```
+
+# Table 1 - Summary statistics
+
+```{r}
+# Loads data
+elearn_balance_data <- haven::read_dta("data/Elearn/elearn_balance_data.dta")
+
+# Columns 1 and 2
+table1_panelA_columns12 <- elearn_balance_data %>% 
+  group_by(treatment) %>% 
+  summarise(
+    across(
+      c(
+        z_score_total_bl,
+        age_bl,
+        attendance_bl,
+        computer_yn_bl,
+        m_ed_noschool,
+        f_ed_noschool
+      ),
+      list(mean = ~ mean(.x, na.rm=T),
+           sd = ~ sd(.x, na.rm=T))
+    )
+  ) %>% 
+  pivot_longer(-treatment,
+               names_to = "var",
+               values_to = "value") %>% 
+  pivot_wider(names_from = treatment, values_from = value) %>% 
+  rename(
+    variable = var,
+    control = `0`,
+    treatment = `1`
+  )
+
+# Column 3
+table1_panelA_column3_models <- elearn_balance_data %>% 
+  filter(child_interviewed_bl==1) %>% 
+  select(
+    school_code,
+    treatment,
+    z_score_total_bl,
+    age_bl,
+    attendance_bl,
+    computer_yn_bl,
+    m_ed_noschool,
+    f_ed_noschool
+  ) %>% 
+  pivot_longer(c(-school_code, -treatment),
+               names_to = "variable",
+               values_to = "value") %>% 
+  group_by(variable) %>% 
+  nest() %>% 
+  mutate(
+    model = purrr::map(data,
+                       ~ estimatr::lm_robust(
+                         data = .,
+                         formula = value ~ treatment,
+                         cluster = school_code,
+                         se_type = "stata"))
+  )
+
+table1_panelA_column3 <- cbind(table1_panelA_column3_models$variable,
+                               purrr::map_dfr(
+                                 .x =table1_panelA_column3_models$model,
+                                 .f = broom::tidy) %>% filter(term=="treatment")
+                               ) %>% 
+  select(`table1_panelA_column3_models$variable`,
+         estimate,
+         `std.error`,
+         `p.value`)
+
+(knitr::kable(table1_panelA_columns12,
+              caption = "Table 1 Panel A Columns 1 and 2"))
+
+(knitr::kable(table1_panelA_column3,
+              caption = "Table 1 Panel A Column 3"))
+```
+
+# Table 2 - Achievement Scores
+
+```{r}
+# Loads data
+elearn_reg_data <- haven::read_dta("data/Elearn/elearn_reg_data.dta") %>% 
+  rename_with(.cols = starts_with("_"), ~ stringr::str_replace(.x, "_", "v_"))
+```
+
+**Remark:** there is no available dataset to replicate the results of column (2).
+
+```{r}
+# ---- Panel A Col 1-4 ----
+
+# Clasrooms
+project_classrooms <- elearn_reg_data %>% 
+  filter(tooktest_el==1) %>% 
+  estimatr::lm_robust(
+  formula = z_irt_total_el ~
+    treatment +
+    v_z_irt_math_bl +
+    v_z_irt_sci_bl +
+    strataFE1 +
+    strataFE2 +
+    strataFE3 +
+    strataFE4 +
+    strataFE5,
+  clusters = school_code,
+  se_type = "stata"
+) %>%
+  broom::tidy() %>% 
+  select(1,2,4)
+
+project_clasrooms_group_mean <- elearn_reg_data %>% 
+  filter(treatment==0 & tooktest_el==1) %>% 
+  summarise(mean = mean(z_irt_total_el, na.rm=T))
+
+# Column 2
+pec_classrooms <- elearn_reg_data %>% 
+  filter(tooktest_el==1 & took_std==1) %>% 
+  estimatr::lm_robust(
+    formula = z_scoreindex_el ~
+      treatment +
+      v_z_irt_math_bl +
+      v_z_irt_sci_bl +
+      v_meanmath_pec_2016 + 
+      v_meansci_pec_2016 + 
+      v_meaneng_pec_2016 +
+      v_meaneng_pec_2016_mi +
+      strataFE1 +
+      strataFE2 +
+      strataFE3 +
+      strataFE4 +
+      strataFE5,
+    clusters = school_code,
+    se_type = "stata"
+  )%>%
+  broom::tidy() %>% 
+  select(1,2,4)
+
+pec_clasrooms_group_mean <- elearn_reg_data %>% 
+  filter(treatment==0 & tooktest_el==1 & took_std==1) %>% 
+  summarise(mean = mean(z_scoreindex_el, na.rm=T))
+
+(knitr::kable(project_classrooms,
+              caption = "Table 2 Panel A Column 1"))
+
+(knitr::kable(project_clasrooms_group_mean,
+              caption = "Project Average control group change or mean"))
+
+(knitr::kable(pec_classrooms,
+              caption = "Table 2 Panel A Column 3"))
+
+(knitr::kable(pec_clasrooms_group_mean,
+              caption = "Combined project and PEC Average control group change or mean"))
+```
+
+# LASSO
+
+Here I show my attempts to replicate the results in Panel B, which includes additional controls selected by the post-double LASSO. In the Online Appendix, the authors mention that set of potential controls have 298 variables. For eLearn Classrooms, LASSO selected: teacher employment rank, time spent on
+non-classroom duties and extra classes, mothers occupations, and parents rela-
+tionship status. Below, I show the Stata code made available by the authors that is responsible for estimating the coefficient in Panel B Column (1):
+
+````
+foreach outcome of varlist z_irt_total_el {
+pdslasso `outcome' treatment (`prepped' $strata ) if `conditions_proj',
+partial($strata $partialled_proj) cluster(school_code) 
+outreg2 using PanelB, replace dta label keep(treatment*) 
+}
+
+```` 
+``z_irt_total_el`` is outcome of interest. The second line regresses this outcome against
+the ``treatment`` variable using the ``pdslasso`` command. According to the ``pdslasso`` documentation, ``(`prepped' $strata )`` the set of potential controls. They are already standardized. ``if `conditions_proj`` simply tells Stata to select only students that took the test, that is, ``tooktest_el==1``. ``partial($strata $partialled_proj)`` indicates which variables are always to be included in the model: all strata dummys and the student's scores in math and science, ``_z_irt_math_bl`` and ``_z_irt_sci_bl``, respectively. Finally, they cluster at the ``school_code``.
+
+I attempted to replicate the result using two packages: ``glmnet`` and ``hdm``. 
+
+## Using ``glmnet``
+
+First I filter the dataframe to inlclude only the students who took the test:
+
+```{r}
+elearn_reg_data_tooktest <- elearn_reg_data %>%
+  filter(tooktest_el==1)
+
+```
+
+Then I create the matrix including all potential controls. I remove ``strataFE6``to avoid perfect collinearity, like I did before. I also select the variables in a specific order that allows me to easily handle the ``penalty.factor`` argument in the next chunk of code. Notice that ``elearn_reg_data_lasso_matrix`` has $305$ variables, of which $7$ are always to be included in the model and the remaining $298$ is the number of items in the set of potential controls. So the set of potential controls *is not* the reason why the replication fails.
+
+```{r}
+elearn_reg_data_lasso_matrix <- elearn_reg_data_tooktest %>%
+  select(v_z_irt_math_bl,
+         v_z_irt_sci_bl,
+         starts_with("strata"),
+         starts_with("v_"),
+         -strataFE6) %>%
+  as.matrix()
+```
+
+Then I perform the cross-validation using ``glmnet::cv.glmnet``. ``x`` is the set of potential controls, ``y`` is the outcome of interest, ``alpha = 1`` represents a LASSO regularization, ``relax=T``allows me to select ``gamma`` parameters in the regularization, and the ``penalty.factor`` indicates which variables are to be always included in the model.
+
+```{r, echo=FALSE}
+cv_model <- glmnet::cv.glmnet(
+  x = elearn_reg_data_lasso_matrix,
+  y = elearn_reg_data_tooktest %>% pull(z_irt_total_el),
+  alpha = 1,
+  relax = T,
+  gamma = c(0, 0.25, 0.5, 0.75, 1),
+  penalty.factor = c(rep(0, 7), rep(1, 298))
+)
+```
+
+
+```{r}
+plot(cv_model)
+```
+
+
+The value of $\lambda$ that gives minimum mean cross-validated error is ``r cv_model$lambda.min``. Then I select optimal controls using ``glmnet::glmnet`` for this value of $\lambda$:
+
+```{r}
+best_model <- glmnet::glmnet(
+  x = elearn_reg_data_lasso_matrix,
+  y = elearn_reg_data_tooktest %>% pull(z_irt_total_el),
+  lambda = cv_model$lambda.min,
+  alpha = 1,
+  penalty.factor = c(rep(0, 7), rep(1, 298)),
+  relax = T
+)
+
+selected_coef <- as.data.frame(as.matrix(best_model$beta)) %>%
+  filter(s0 != 0)
+```
+
+This method selects a total of ``r nrow(selected_coef)`` coefficients, which is a much larger set than the one found by the authors. I am not sure why this is happening. ``glmnet::cv.glmnet`` should have given us a much larger $\lambda$ that minimizes the MSE so that we would have a number of controls similar to the one found by the authors. I ran ``best_model`` for every $\lambda$ in the sequence and none of them resulted in the exact same set of controls found by the authors.
+
+## Using ``hdm``
+
+[@hdm] published the ``hdm`` package on CRAN which performs post-double selection LASSO. It is much more similar to the usage of ``pdslasso``in Stata, in comparison to ``glmnet``. It also comes with a very neat documentation by the authors themselves that can be read [here](https://arxiv.org/pdf/1603.01700.pdf). Following their instructions, I use the ``hdm::rlassoEffect`` function. ``x``is the set of potential controls, ``y`` is the outcome of interest, and ``d`` is the main regressor that is treated as causal. I use ``I3 = c(rep(T, 8), rep(F, 298))`` so the strata dummies and the two main controls are always included in the model, like I did when using ``glmnet``. I explictly asks for the double selection method using ``method = "double selection"``.
+
+```{r}
+lasso_x <- elearn_reg_data_tooktest %>%
+  select(v_z_irt_math_bl,
+         v_z_irt_sci_bl,
+         starts_with("strata"),
+         starts_with("v_"),
+         -strataFE6) %>%
+  as.matrix()
+
+lasso_y <- elearn_reg_data_tooktest %>% pull(z_irt_total_el) %>% as.matrix()
+
+lasso_d <- elearn_reg_data_tooktest %>% pull(treatment) %>% as.matrix()
+
+lasso <- hdm::rlassoEffect(
+  x = lasso_x,
+  y = lasso_y,
+  d = lasso_d,
+  I3 = c(rep(T, 7), rep(F, 298)),
+  method = "double selection"
+)
+```
+
+However:
+
+```{r}
+summary(lasso)
+
+(lasso$no.selected)
+```
+
+My guess is that I was including all levels of some dummy variable, resulting in perfect collinearity that explain the standard error. However, the set of potential controls that I am using is exactly the same used by the authors. Besides, since I have no access to the survey, I cannot say which columns represent different levels of the same dummy variable based solely on their names.
+
+Another possibility is that the $298$ potential controls are receiving some treatment before the authors run the ``pdslasso`` command. Some kind of treatment is surely being conducted, since I can see the command in the ``master.do`` file. If this treatment somehow makes the ``hdm::rlassoEffect`` behaves erratically, this could explain the results. Unfortunately, I have no access to the variables before this treament, neither I can know for certainty what exactly this treatment is doing.
+
+Finally, I can at least be sure that the problem is in the set of potential controls, since ``hdm::rlassoEffect`` gives a reasonable result if I exclude them:
+
+```{r}
+lasso_x <- elearn_reg_data_tooktest %>%
+  select(v_z_irt_math_bl,
+         v_z_irt_sci_bl,
+         starts_with("strata"),
+         # starts_with("v_"),
+         -strataFE6) %>%
+  as.matrix()
+
+lasso_y <- elearn_reg_data_tooktest %>% pull(z_irt_total_el) %>% as.matrix()
+
+lasso_d <- elearn_reg_data_tooktest %>% pull(treatment) %>% as.matrix()
+
+lasso <- hdm::rlassoEffect(
+  x = lasso_x,
+  y = lasso_y,
+  d = lasso_d,
+  # I3 = c(rep(T, 7), rep(F, 298)),
+  method = "double selection"
+)
+
+summary(lasso)
+```
+
+And selecting only the students' scores and their square values:
+
+```{r}
+lasso_x <- elearn_reg_data_tooktest %>%
+  select(v_z_irt_math_bl,
+         v_z_irt_sci_bl,
+         starts_with("strata"),
+         starts_with("v_z_"),
+         -strataFE6) %>%
+  as.matrix()
+
+lasso_y <- elearn_reg_data_tooktest %>% pull(z_irt_total_el) %>% as.matrix()
+
+lasso_d <- elearn_reg_data_tooktest %>% pull(treatment) %>% as.matrix()
+
+lasso <- hdm::rlassoEffect(
+  x = lasso_x,
+  y = lasso_y,
+  d = lasso_d,
+  I3 = c(rep(T, 5), rep(F, 6)),
+  method = "double selection"
+)
+
+summary(lasso)
+(lasso$no.selected)
+```
+
+Again a reasonable result. Thus I am convinced that the problem resides with the dummy variables. However, in this last specification, ``hdm::rlassoEffect`` again selects no controls.
